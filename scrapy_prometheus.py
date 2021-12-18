@@ -65,22 +65,40 @@ class PrometheusStatsCollector(statscollectors.StatsCollector):
 
     # noinspection PyProtectedMember
     def get_metric(self, key, metric_type, spider=None, labels=None):
+        labels = labels or {}
         prefix = self.crawler.settings.get('PROMETHEUS_METRIC_PREFIX', 'scrapy_prometheus')
         name = '%s_%s' % (prefix, key.replace('/', '_'))
+        name = name.replace('.', '_')
+
+        if "class" in name:
+            return None, False
+
+        prometheus_name = name
+        if metric_type == METRIC_COUNTER:
+            prometheus_name += '_total'
 
         registry = self.get_registry(spider)
 
-        if name not in registry._names_to_collectors:
-            metric, created = metric_type(name, key, labels, registry=registry), True
+        if prometheus_name not in registry._names_to_collectors:
+            try:
+                metric, created = metric_type(
+                    prometheus_name, key, labels, registry=registry), True
+            except ValueError as ex:
+                msg = ex.args[0]
+                if msg.startswith("Duplicated timeseries") or msg.startswith("Invalid metric name"):
+                    return None, False
+                raise ex
         else:
-            metric, created = registry._names_to_collectors[name], False
-            if not hasattr(metric_type, '__wrapped__') or hasattr(metric_type, '__wrapped__') and not isinstance(metric,
-                                                                                                                 metric_type.__wrapped__):
+            metric, created = registry._names_to_collectors[prometheus_name], False
+            if not isinstance(metric, metric_type):
                 if not self.crawler.settings.getbool('PROMETHEUS_SUPPRESS_TYPE_CHECK', False):
                     raise InvalidMetricType('Wrong type %s for metric %s, which is %s' % (
-                        metric_type.__wrapped__.__name__, name, metric.__class__.__name__
+                        metric_type, name, metric.__class__.__name__
                     ))
                 else:
+                    print('Wrong type %s for metric %s, which is %s' % (
+                        metric_type, name, metric.__class__.__name__
+                    ))
                     return None, created
 
         return metric, created
